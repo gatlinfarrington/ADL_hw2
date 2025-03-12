@@ -18,26 +18,28 @@ class Autoregressive(abc.ABC):
         pass
 
 class AutoregressiveModel(nn.Module, Autoregressive):
-    def __init__(self, d_latent: int = 256, n_tokens: int = 2**10):  # Increased d_latent
+    def __init__(self, d_latent: int = 256, n_tokens: int = 2**10):
         super().__init__()
         self.h = 30
         self.w = 20
-        self.seq_len = self.h * self.w  # 600
+        self.seq_len = self.h * self.w
         self.d_latent = d_latent
         self.n_tokens = n_tokens
 
         self.embedding = nn.Embedding(n_tokens, d_latent)
-        self.pos_embedding = nn.Parameter(torch.randn(1, self.seq_len, d_latent) * 0.01)  # Adjusted init scale
+        nn.init.xavier_uniform_(self.embedding.weight)  # Better initialization
+        self.pos_embedding = nn.Parameter(torch.randn(1, self.seq_len, d_latent) * 0.01)
         self.transformer = nn.ModuleList([
             nn.TransformerEncoderLayer(
                 d_model=d_latent,
-                nhead=8,  # Increased heads
-                dim_feedforward=1024,  # Increased feedforward
+                nhead=8,
+                dim_feedforward=1024,
                 dropout=0.1,
                 batch_first=True
-            ) for _ in range(4)  # Increased layers
+            ) for _ in range(4)
         ])
         self.to_logits = nn.Linear(d_latent, n_tokens)
+        nn.init.xavier_uniform_(self.to_logits.weight)  # Better initialization
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         B = x.shape[0]
@@ -67,6 +69,8 @@ class AutoregressiveModel(nn.Module, Autoregressive):
                     probs = probs.view(B, -1)
                 next_token = torch.multinomial(probs, num_samples=1)
                 tokens[:, t] = next_token.squeeze(-1)
+                print(f"Token at position {t}: {next_token.squeeze(-1).cpu().numpy()}")  # Debug
+        print(f"Final tokens: {tokens.cpu().numpy()}")  # Debug
         return tokens.view(B, h, w)
 
 if __name__ == "__main__":

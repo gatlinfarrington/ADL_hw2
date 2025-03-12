@@ -55,7 +55,7 @@ class BSQ(nn.Module):
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
         codes = self.encode(x)
         indices = self._code_to_index(codes)
-        return indices
+        return indices  # Ensure (B, h, w)
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 2:
@@ -78,6 +78,7 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
         super().__init__(patch_size=patch_size, latent_dim=latent_dim, bottleneck=latent_dim)
         self.bsq = BSQ(codebook_bits=codebook_bits, embedding_dim=latent_dim)
         self.codebook_bits = codebook_bits
+        self.patch_size = patch_size  # Explicitly store for reference
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         embeddings = self.encoder(x)
@@ -94,24 +95,25 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
         reconstructed = self.decode(codes)
         indices = self.bsq._code_to_index(codes).flatten()
         cnt = torch.bincount(indices, minlength=2**self.codebook_bits)
-        # Add codebook usage penalty
         cb0 = (cnt == 0).float().mean()
         cb2 = (cnt <= 2).float().mean()
         additional = {
             "cb0": cb0.detach(),
             "cb2": cb2.detach(),
         }
-        # Encourage diverse code usage (small penalty for unused codes)
-        code_usage_loss = cb0 * 0.1  # Adjustable weight
+        code_usage_loss = cb0 * 0.1
         if x.shape[0] == 1:
             reconstructed = reconstructed.squeeze(0)
         return reconstructed, {"code_usage_loss": code_usage_loss} | additional
 
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 3:
-            x = x.unsqueeze(0)
+            x = x.unsqueeze(0)  # Ensure batch dimension
+        # Adjust input to correct HxW order (150x100)
+        if x.shape[1] == 100 and x.shape[2] == 150:  # Detect swapped dimensions
+            x = x.transpose(1, 2)  # Swap to (B, 150, 100, 3)
         indices = self.bsq.encode_index(self.encoder(x))
-        return indices
+        return indices  # (B, 30, 20)
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
         return self.decode(self.bsq._index_to_code(x))
