@@ -57,7 +57,16 @@ class AutoregressiveModel(nn.Module, Autoregressive):
         mask = torch.triu(torch.ones(seq_len, seq_len) * float('-inf'), diagonal=1).to(x.device)
         print(f"Mask shape: {mask.shape}")
         
+        # Flatten spatial dimensions before passing to Transformer
+        B, C, H, W, D = x.shape  # Expected shape: (batch, 1, height, width, embedding_dim)
+        x = x.view(B, H * W, D)  # Reshape to (batch, sequence_length, embedding_dim)
+
+        # Ensure mask shape matches sequence length
+        seq_len = H * W
+        mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1)  # Causal mask
+
         x = self.transformer(x, mask=mask)
+        
         print(f"After transformer: {x.shape}")
         logits = self.to_logits(x)
         print(f"Logits shape before view: {logits.shape}")

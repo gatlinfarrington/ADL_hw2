@@ -109,11 +109,10 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 3:
             x = x.unsqueeze(0)  # Ensure batch dimension
-        # Adjust input to correct HxW order (150x100)
-        if x.shape[1] == 100 and x.shape[2] == 150:  # Detect swapped dimensions
+        if x.shape[1] == 100 and x.shape[2] == 150:  
             x = x.transpose(1, 2)  # Swap to (B, 150, 100, 3)
         indices = self.bsq.encode_index(self.encoder(x))
-        return indices  # (B, 30, 20)
+        return indices
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
         return self.decode(self.bsq._index_to_code(x))
