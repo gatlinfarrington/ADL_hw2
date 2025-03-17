@@ -78,7 +78,7 @@ class AutoregressiveModel(nn.Module, Autoregressive):
         print(f"Final logits shape: {logits.shape}")
         return logits, {}
 
-    def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None, temperature: float = 1.0, top_k: int = 50) -> torch.Tensor:
+    def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None, temperature: float = 0.7, top_k: int = 20) -> torch.Tensor:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.to(device)
@@ -91,19 +91,23 @@ class AutoregressiveModel(nn.Module, Autoregressive):
                 probs = nn.functional.softmax(logits_t, dim=-1)
                 if probs.dim() > 2:
                     probs = probs.view(B, -1)
+                # Clamp logits to prevent numerical issues
+                logits_t = torch.clamp(logits_t, min=-100.0, max=100.0)
+                probs = nn.functional.softmax(logits_t, dim=-1)
                 top_k_probs, top_k_indices = torch.topk(probs, top_k, dim=-1)
                 top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
                 next_token_indices = torch.multinomial(top_k_probs, num_samples=1)
                 next_token = top_k_indices.gather(-1, next_token_indices)
-                tokens[:, t] = next_token.squeeze(-1)
+                # Ensure tokens are within codebook range (0 to n_tokens-1)
+                tokens[:, t] = torch.clamp(next_token.squeeze(-1), min=0, max=self.n_tokens - 1)
                 if t % 100 == 0:
-                    print(f"Token at position {t}: {next_token.squeeze(-1).cpu().numpy()}")
+                    print(f"Token at position {t}: {tokens[:, t].cpu().numpy()}")
         print(f"Final tokens shape: {tokens.shape}")
         print(f"Final tokens unique values: {torch.unique(tokens).cpu().numpy()}")
         return tokens.view(B, h, w)
 
 if __name__ == "__main__":
-    model = AutoregressiveModel(d_latent=256, n_tokens=1024)
+    model = AutoregressiveModel(d_latent=512, n_tokens=1024)
     x = torch.randint(0, 1024, (2, 30, 20))
     logits, _ = model(x)
     print(f"Logits shape: {logits.shape}")
