@@ -3,11 +3,20 @@ import torch
 from torch import nn
 
 def load() -> torch.nn.Module:
-    from pathlib import Path
     model_name = "PatchAutoEncoder"
     model_path = Path(__file__).parent / f"{model_name}.pth"
     print(f"Loading {model_name} from {model_path}")
-    return torch.load(model_path, weights_only=False)
+
+    # Load the model on CPU first to avoid MPS errors
+    model = torch.load(model_path, map_location="cpu")  # Force CPU loading
+
+    # Determine available device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Move model to the correct device
+    model.to(device)
+    print(f"{model_name} loaded successfully to {device}")
+    return model
 
 def hwc_to_chw(x: torch.Tensor) -> torch.Tensor:
     dims = list(range(x.dim()))
