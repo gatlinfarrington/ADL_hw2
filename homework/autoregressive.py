@@ -37,7 +37,7 @@ class AutoregressiveModel(nn.Module, Autoregressive):
             dropout=0.1,
             batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4, norm=nn.LayerNorm(d_latent))
         
         self.to_logits = nn.Linear(d_latent, n_tokens)
         nn.init.xavier_uniform_(self.to_logits.weight)
@@ -45,13 +45,15 @@ class AutoregressiveModel(nn.Module, Autoregressive):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         print(f"Input shape: {x.shape}")
         B = x.shape[0]
-        # Handle training input [B, h, w] or generation input [B, t+1]
-        if x.dim() == 3:  # [B, h, w] from training
+        # Handle training input [B, 1, h, w], [B, h, w], or generation input [B, t+1]
+        if x.dim() == 4:  # [B, 1, h, w]
+            x = x.squeeze(1)  # [B, h, w]
+        if x.dim() == 3:  # [B, h, w]
             x = x.view(B, -1)  # [B, h*w]
-        elif x.dim() == 2:  # [B, t+1] from generation
-            pass  # Already in correct shape
+        elif x.dim() == 2:  # [B, t+1]
+            pass  # Already in the correct shape
         else:
-            raise ValueError(f"Expected 2D or 3D input, got {x.dim()}D tensor with shape {x.shape}")
+            raise ValueError(f"Expected 2D, 3D, or 4D input, got {x.dim()}D tensor with shape {x.shape}")
         print(f"After flatten: {x.shape}")
         
         x = self.embedding(x)
@@ -61,7 +63,7 @@ class AutoregressiveModel(nn.Module, Autoregressive):
         seq_len = x.shape[1]
         if seq_len > self.seq_len:
             raise ValueError(f"Sequence length {seq_len} exceeds max length {self.seq_len}")
-        x = x + self.pos_embedding[:, :seq_len]  # Use only the needed portion
+        x = x + self.pos_embedding[:, :seq_len]
         print(f"After pos embedding: {x.shape}")
         
         mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device) * float('-inf'), diagonal=1)
@@ -71,7 +73,7 @@ class AutoregressiveModel(nn.Module, Autoregressive):
         print(f"After transformer: {x.shape}")
         logits = self.to_logits(x)
         print(f"Logits shape before view: {logits.shape}")
-        if x.shape[1] == self.seq_len:  # Only reshape for full sequence during training
+        if x.shape[1] == self.seq_len:
             logits = logits.view(B, self.h, self.w, self.n_tokens)
         print(f"Final logits shape: {logits.shape}")
         return logits, {}
