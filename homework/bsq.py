@@ -35,7 +35,7 @@ class BSQ(nn.Module):
         if x.dim() == 3:
             x = x.unsqueeze(0)
         B, h, w, _ = x.shape
-        x = x.view(B * h * w, -1)
+        x = x.reshape(B * h * w, -1)
         x = self.down_proj(x)
         x = nn.functional.normalize(x, p=2, dim=-1)
         x = diff_sign(x)
@@ -58,17 +58,17 @@ class BSQ(nn.Module):
         return self.decode(self.encode(x))
 
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
-        codes = self.encode(x)
-        indices = self._code_to_index(codes)
-        return indices  # Ensure (B, h, w)
+        codes = self.encode(x)  # Directly use self.encode()
+        indices = self._code_to_index(codes)  # Convert codes to indices
+        return indices  # Ensure correct shape
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 2:
-            x = x.unsqueeze(0)
-        codes = self._index_to_code(x)
-        decoded = self.decode(codes)
-        if decoded.dim() == 4 and decoded.shape[0] == 1:
-            return decoded.squeeze(0)
+        print(f"decode_index() input shape: {x.shape}")  # Print input shape
+
+        decoded = self.decode(self.bsq._index_to_code(x))
+
+        print(f"Decoded output shape before reshaping: {decoded.shape}")  # Print before reshaping
+
         return decoded
 
     def _code_to_index(self, x: torch.Tensor) -> torch.Tensor:
@@ -90,8 +90,21 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
         return self.bsq.encode(embeddings)
         
     def decode(self, x: torch.Tensor) -> torch.Tensor:
+        print(f"🔹 Input to decode (BSQ output) shape: {x.shape}")
+
         embeddings = self.bsq.decode(x)
-        return self.decoder(embeddings)
+        print(f"🔹 After BSQ decode, shape: {embeddings.shape}")
+
+        reconstructed = self.decoder(embeddings)
+        print(f"🔹 After decoder, shape: {reconstructed.shape}")
+
+        # Check if height & width are correct
+        if reconstructed.shape[1] != 150:  
+            print("⚠️ Height is incorrect. Swapping height and width.")
+            reconstructed = reconstructed.permute(0, 2, 1, 3)  # Swap height & width
+            print(f"🔹 After permute, shape: {reconstructed.shape}")
+
+        return reconstructed
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         if x.dim() == 3:
@@ -112,12 +125,12 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
         return reconstructed, {"code_usage_loss": code_usage_loss} | additional
 
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 3:
-            x = x.unsqueeze(0)  # Ensure batch dimension
-        if x.shape[1] == 100 and x.shape[2] == 150:  
-            x = x.transpose(1, 2)  # Swap to (B, 150, 100, 3)
-        indices = self.bsq.encode_index(self.encoder(x))
-        return indices
+      if x.dim() == 3:
+          x = x.unsqueeze(0)  # Ensure batch dimension
+      if x.shape[1] == 100 and x.shape[2] == 150:  
+          x = x.transpose(1, 2)  # Swap to (B, 150, 100, 3) before encoding
+      indices = self.bsq.encode_index(self.encoder(x))
+      return indices
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
         return self.decode(self.bsq._index_to_code(x))
