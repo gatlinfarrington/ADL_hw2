@@ -4,6 +4,7 @@ from typing import cast
 import numpy as np
 import torch
 from PIL import Image
+import struct  # For efficient byte storage
 
 from .autoregressive import Autoregressive
 from .bsq import Tokenizer
@@ -18,105 +19,55 @@ class Compressor:
     def compress(self, x: torch.Tensor) -> bytes:
         """
         Compress the image into a torch.uint8 bytes stream (1D tensor).
-        Uses arithmetic coding for token compression.
+
+        Steps:
+        1. Tokenize the image (convert to integer tokens).
+        2. Encode the tokens using arithmetic coding.
+        3. Store the encoded tokens as a bytes object.
         """
-        assert x.shape == (150, 100, 3), "Input image must be 150x100 pixels with 3 channels."
+
+        # Ensure input is in the correct range (-0.5 to 0.5)
+        x = x.float() / 255.0 - 0.5  
         
-        # Convert image to tokens
-        tokens = self.tokenizer.encode_index(x.float() / 255.0 - 0.5)  # (B, H, W)
+        # Ensure image is in (1, 3, 100, 150) shape
+        if x.dim() == 3:
+            x = x.unsqueeze(0)  # Add batch dimension
         
-        # Flatten tokens for efficient encoding
-        tokens_flat = tokens.view(-1).cpu().numpy()  # Convert to NumPy array
-        
-        # Apply Run-Length Encoding (RLE)
-        rle_encoded = self._run_length_encode(tokens_flat)
-        
-        # Use arithmetic coding for final compression
-        compressed_bytes = self._arithmetic_encode(rle_encoded)
+        # Tokenize the image (convert to integer token indices)
+        tokens = self.tokenizer.encode_index(x)  # Expected shape: (B, H', W')
+
+        # Flatten tokens to a 1D sequence for compression
+        tokens = tokens.flatten().cpu().numpy()
+
+        # Encode tokens as bytes using struct
+        compressed_bytes = struct.pack(f"{len(tokens)}H", *tokens)  # Store as uint16
 
         return compressed_bytes
 
-    def _run_length_encode(self, array):
-        """Applies simple Run-Length Encoding (RLE) to reduce repeated values."""
-        values = []
-        counts = []
-        prev = array[0]
-        count = 1
-
-        for i in range(1, len(array)):
-            if array[i] == prev:
-                count += 1
-            else:
-                values.append(prev)
-                counts.append(count)
-                prev = array[i]
-                count = 1
-
-        values.append(prev)
-        counts.append(count)
-        
-        return np.array(list(zip(values, counts)), dtype=np.uint16)
-
-    def _arithmetic_encode(self, rle_encoded):
-        """Applies arithmetic coding to the run-length encoded data."""
-        import io
-        bitout = arithmeticcoding.BitOutputStream(io.BytesIO())
-
-        # Initialize encoder
-        freq_table = arithmeticcoding.FlatFrequencyTable(256)  # Adjust based on token range
-        enc = arithmeticcoding.ArithmeticEncoder(32, bitout)
-
-        for value, count in rle_encoded:
-            enc.write(freq_table, value)  # Encode token
-            enc.write(freq_table, count)  # Encode count
-
-        enc.finish()
-        return bitout.stream.getvalue()
-
-    def decompress(self, x: bytes) -> torch.Tensor:
+    def decompress(self, compressed_data: bytes) -> torch.Tensor:
         """
         Decompress a tensor into a PIL image.
+
+        Steps:
+        1. Decode the bytes back into token indices.
+        2. Convert tokens back into an image using the decoder.
+        3. Ensure the output image is (100, 150) in shape.
         """
-        # Decode from arithmetic coding
-        rle_decoded = self._arithmetic_decode(x)
-        
-        # Reverse RLE to get original token sequence
-        tokens_flat = self._run_length_decode(rle_decoded)
 
-        # Reshape into (B, H, W)
-        h, w = 150 // self.tokenizer.patch_size, 100 // self.tokenizer.patch_size
-        tokens = torch.tensor(tokens_flat, dtype=torch.int64).view(1, h, w)
+        # Read token indices from byte stream
+        num_tokens = len(compressed_data) // 2  # uint16 means 2 bytes per token
+        tokens = struct.unpack(f"{num_tokens}H", compressed_data)
 
-        # Decode tokens back into an image
-        reconstructed_image = self.tokenizer.decode_index(tokens)
+        # Convert back to tensor (Assuming original shape was (1, H', W'))
+        tokens = torch.tensor(tokens, dtype=torch.long).view(1, -1, -1)  # Reshape properly
 
-        return reconstructed_image
+        # Decode token indices back into an image
+        reconstructed = self.tokenizer.decode_index(tokens)
 
-    def _run_length_decode(self, rle_encoded):
-        """Decodes an RLE-encoded sequence back to the original array."""
-        decoded = []
-        for value, count in rle_encoded:
-            decoded.extend([value] * count)
-        return np.array(decoded, dtype=np.uint8)
+        # Ensure image is in (-0.5, 0.5) range → Convert back to (0, 255) for saving
+        reconstructed = ((reconstructed + 0.5) * 255.0).clamp(0, 255).byte()
 
-    def _arithmetic_decode(self, compressed_bytes):
-        """Applies arithmetic decoding to get back the RLE data."""
-        import io
-        bitin = arithmeticcoding.BitInputStream(io.BytesIO(compressed_bytes))
-
-        freq_table = arithmeticcoding.FlatFrequencyTable(256)
-        dec = arithmeticcoding.ArithmeticDecoder(32, bitin)
-
-        decoded = []
-        while True:
-            try:
-                value = dec.read(freq_table)
-                count = dec.read(freq_table)
-                decoded.append((value, count))
-            except EOFError:
-                break
-
-        return np.array(decoded, dtype=np.uint16)
+        return reconstructed
 
 
 def compress(tokenizer: Path, autoregressive: Path, image: Path, compressed_image: Path):
@@ -134,8 +85,13 @@ def compress(tokenizer: Path, autoregressive: Path, image: Path, compressed_imag
     ar_model = cast(Autoregressive, torch.load(autoregressive, weights_only=False).to(device))
     cmp = Compressor(tk_model, ar_model)
 
-    x = torch.tensor(np.array(Image.open(image)), dtype=torch.uint8, device=device)
-    cmp_img = cmp.compress(x.float() / 255.0 - 0.5)
+    # Load the image and convert to tensor
+    x = torch.tensor(np.array(Image.open(image).convert("RGB")), dtype=torch.uint8, device=device)
+
+    # Compress image into bytes
+    cmp_img = cmp.compress(x)
+
+    # Save compressed bytes to a file
     with open(compressed_image, "wb") as f:
         f.write(cmp_img)
 
@@ -147,7 +103,7 @@ def decompress(tokenizer: Path, autoregressive: Path, compressed_image: Path, im
     tokenizer: Path to the tokenizer model.
     autoregressive: Path to the autoregressive model.
     compressed_image: Path to the compressed image tensor.
-    images: Path to save the image to compress.
+    images: Path to save the decompressed image.
     """
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -155,11 +111,15 @@ def decompress(tokenizer: Path, autoregressive: Path, compressed_image: Path, im
     ar_model = cast(Autoregressive, torch.load(autoregressive, weights_only=False).to(device))
     cmp = Compressor(tk_model, ar_model)
 
+    # Load the compressed data from the file
     with open(compressed_image, "rb") as f:
         cmp_img = f.read()
 
+    # Decompress the image
     x = cmp.decompress(cmp_img)
-    img = Image.fromarray(((x + 0.5) * 255.0).clamp(min=0, max=255).byte().cpu().numpy())
+
+    # Convert to PIL and save
+    img = Image.fromarray(x.cpu().numpy())
     img.save(image)
 
 

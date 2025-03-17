@@ -42,12 +42,17 @@ class BSQ(nn.Module):
         return x.view(B, h, w, self.codebook_bits)
 
     def decode(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 3:
-            x = x.unsqueeze(0)
-        B, h, w, _ = x.shape
-        x = x.view(B * h * w, -1)
-        x = self.up_proj(x)
-        return x.view(B, h, w, self.embedding_dim)
+      if x.dim() == 3:
+          x = x.unsqueeze(0)  # Ensure batch dimension
+
+      B, h, w, _ = x.shape  # Encoded shape
+      x = x.view(B * h * w, -1)  # Flatten
+      x = self.up_proj(x)  # Expand to embedding_dim
+      x = x.view(B, h, w, self.embedding_dim)
+      
+      # Don't manipulate channels here or perform interpolation
+      # Just return the embeddings and let the decoder handle it
+      return x
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.decode(self.encode(x))
@@ -74,16 +79,16 @@ class BSQ(nn.Module):
         return 2 * ((x[..., None] & (2 ** torch.arange(self.codebook_bits).to(x.device))) > 0).float() - 1
 
 class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
-    def __init__(self, patch_size: int = 8, latent_dim: int = 128, codebook_bits: int = 8):
+    def __init__(self, patch_size: int = 5, latent_dim: int = 128, codebook_bits: int = 8):
         super().__init__(patch_size=patch_size, latent_dim=latent_dim, bottleneck=latent_dim)
         self.bsq = BSQ(codebook_bits=codebook_bits, embedding_dim=latent_dim)
         self.codebook_bits = codebook_bits
-        self.patch_size = patch_size  # Explicitly store for reference
-
+        self.patch_size = patch_size  # Store for later use
+        
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         embeddings = self.encoder(x)
         return self.bsq.encode(embeddings)
-
+        
     def decode(self, x: torch.Tensor) -> torch.Tensor:
         embeddings = self.bsq.decode(x)
         return self.decoder(embeddings)

@@ -61,19 +61,21 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             return chw_to_hwc(x)
 
     class PatchDecoder(torch.nn.Module):
-        def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
-            super().__init__()
-            self.patch_size = patch_size
-            self.conv = nn.ConvTranspose2d(bottleneck, latent_dim, kernel_size=3, padding=1, bias=False)
-            self.activation = nn.GELU()
-            self.unpatchify = UnpatchifyLinear(patch_size=patch_size, latent_dim=latent_dim)
+      def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
+          super().__init__()
+          self.patch_size = patch_size
+          # Make sure padding is sufficient
+          self.conv = nn.ConvTranspose2d(bottleneck, latent_dim, kernel_size=3, padding=1, bias=False)
+          self.activation = nn.GELU()
+          self.unpatchify = UnpatchifyLinear(patch_size=patch_size, latent_dim=latent_dim)
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            x = hwc_to_chw(x)
-            x = self.conv(x)
-            x = self.activation(x)
-            x = chw_to_hwc(x)
-            return self.unpatchify(x)
+      def forward(self, x: torch.Tensor) -> torch.Tensor:
+          # Preserve dimensions through the entire pipeline
+          x = hwc_to_chw(x)
+          x = self.conv(x)
+          x = self.activation(x)
+          x = chw_to_hwc(x)
+          return self.unpatchify(x)
 
     def __init__(self, patch_size: int = 5, latent_dim: int = 128, bottleneck: int = 128):
         super().__init__()
