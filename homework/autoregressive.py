@@ -43,19 +43,19 @@ class AutoregressiveModel(nn.Module, Autoregressive):
         nn.init.xavier_uniform_(self.to_logits.weight)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        print(f"Input shape: {x.shape}")
+        # print(f"Input shape: {x.shape}")
         B = x.shape[0]
         if x.dim() == 3:
             x = x.view(B, -1)
-        print(f"After flatten: {x.shape}")
+        # print(f"After flatten: {x.shape}")
         x = self.embedding(x)
-        print(f"After embedding: {x.shape}")
+        # print(f"After embedding: {x.shape}")
         x = x + self.pos_embedding[:, :x.shape[1]]
-        print(f"After pos embedding: {x.shape}")
+        # print(f"After pos embedding: {x.shape}")
         
         seq_len = x.shape[1]
         mask = torch.triu(torch.ones(seq_len, seq_len) * float('-inf'), diagonal=1).to(x.device)
-        print(f"Mask shape: {mask.shape}")
+        # print(f"Mask shape: {mask.shape}")
         
         # Flatten spatial dimensions before passing to Transformer
         B, C, H, W, D = x.shape  # Expected shape: (batch, 1, height, width, embedding_dim)
@@ -66,13 +66,13 @@ class AutoregressiveModel(nn.Module, Autoregressive):
         mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1)  # Causal mask
 
         x = self.transformer(x, mask=mask)
-        
-        print(f"After transformer: {x.shape}")
+
+        # print(f"After transformer: {x.shape}")
         logits = self.to_logits(x)
-        print(f"Logits shape before view: {logits.shape}")
+        # print(f"Logits shape before view: {logits.shape}")
         if x.shape[1] == self.seq_len:
             logits = logits.view(B, self.h, self.w, self.n_tokens)
-        print(f"Final logits shape: {logits.shape}")
+        # print(f"Final logits shape: {logits.shape}")
         return logits, {}
 
     def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None, temperature: float = 1.0, top_k: int = 50) -> torch.Tensor:
